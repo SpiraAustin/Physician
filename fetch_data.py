@@ -3,7 +3,7 @@
 fetch_data.py - Download the public inputs ro_sites.py needs into data/.
 
   NDF (current)  data.cms.gov provider-data API, dataset mj5m-pzi6
-  NDF (archive)  data.cms.gov provider-data archive, December release per year
+  NDF (archive)  data.cms.gov provider-data archive, last release of each year
   PUP            data.cms.gov "Medicare Physician & Other Practitioners - by
                  Provider and Service" (latest year), pulled via the data API
                  filtered to Radiation Oncology so it's MBs, not ~3 GB
@@ -19,8 +19,8 @@ import argparse, csv, datetime, json, os, sys, urllib.parse, urllib.request, zip
 
 UA = {"User-Agent": "ro-sites/1.0"}
 NDF_META = "https://data.cms.gov/provider-data/api/1/metastore/schemas/dataset/items/mj5m-pzi6"
-NDF_ARCHIVE = ("https://data.cms.gov/provider-data/sites/default/files/archive/"
-               "Doctors%20and%20clinicians/{y}/doctors_and_clinicians_12_{y}.zip")
+CMS = "https://data.cms.gov"
+NDF_ARCHIVE_API = CMS + "/provider-data/api/1/archive/aggregate/theme/doctors-clinicians/relative"
 PUP_TITLE = "Medicare Physician & Other Practitioners - by Provider and Service"
 RUCC_URL = ("https://ers.usda.gov/sites/default/files/_laserfiche/DataFiles/53251/"
             "Ruralurbancontinuumcodes2023.csv")
@@ -53,13 +53,17 @@ def ndf_year(d, y):
     out = os.path.join(d, f"ndf_{y}.csv")
     if os.path.exists(out):
         print(f"  have {out}"); return out
-    z = save(NDF_ARCHIVE.format(y=y), os.path.join(d, f"ndf_{y}.zip"))
+    # last monthly release of the year (paper: final file per year)
+    rel = max((x for x in json.load(get(NDF_ARCHIVE_API))["data"]
+               if x["type"] == "theme" and x["date"].startswith(str(y))), key=lambda x: x["date"])
+    z = save(CMS + rel["url"], os.path.join(d, f"ndf_{y}.zip"))
     with zipfile.ZipFile(z) as zf:
         name = max((n for n in zf.namelist() if n.lower().endswith(".csv")
                     and "national" in n.lower()), key=lambda n: zf.getinfo(n).file_size)
         with zf.open(name) as src, open(out, "wb") as dst:
             while chunk := src.read(1 << 20):
                 dst.write(chunk)
+    os.remove(z)
     return out
 
 

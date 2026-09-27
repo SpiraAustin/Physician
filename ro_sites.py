@@ -106,11 +106,22 @@ SUFFIX = {"STREET": "ST", "AVENUE": "AVE", "ROAD": "RD", "DRIVE": "DR",
 UNIT = re.compile(r"\b(STE|SUITE|UNIT|APT|BLDG|FL|FLOOR|RM|ROOM)\b\s*\S*.*$|#.*$")
 
 
+DIRS = {"N", "S", "E", "W", "NE", "NW", "SE", "SW"}
+
+
 def norm_addr(a1, zip5):
+    """Site key. Numbered addresses collapse to house number + first street-name
+    word + ZIP, so '1000 JOHNSON FERRY RD NE' == '1000 Johnson Ferry Road',
+    '1001 S GEORGE ST 2ND' == '1001 S George St', '100 CASA ST C' == '100 Casa St'."""
     s = str(a1 or "").upper()
     s = re.sub(r"[.,]", " ", s)
     s = UNIT.sub("", s)  # suite/floor -> same building = same site
+    s = re.sub(r"\b(N|S|E|W|NE|NW|SE|SW)(\d)", r"\1 \2", s)  # NW22ND -> NW 22ND
     toks = [SUFFIX.get(t, t) for t in s.split()]
+    m = re.match(r"^(\d+)[A-Z]?$", toks[0]) if toks else None
+    name = [t for t in toks[1:] if t not in DIRS and len(t) > 1]
+    if m and name:
+        return f"{m.group(1)} {name[0]}|{zip5}"
     return " ".join(toks).strip() + "|" + zip5
 
 
@@ -148,10 +159,8 @@ def load_ndf(path, year):
     for ch in pd.read_csv(path, usecols=need, dtype=str, chunksize=500_000,
                           encoding_errors="replace", low_memory=False):
         ch = ch.rename(columns=colmap)
-        spec = ch["pri_spec"].fillna("").str.upper()
-        if "sec_spec_all" in ch:
-            spec = spec + " " + ch["sec_spec_all"].fillna("").str.upper()
-        parts.append(ch[spec.str.contains(RO_SPEC, regex=False)])
+        # primary specialty only: secondary RO pulls in diagnostic/IR radiologists
+        parts.append(ch[ch["pri_spec"].fillna("").str.upper().str.strip() == RO_SPEC])
     df = pd.concat(parts, ignore_index=True)
     for c in ALIASES:  # uniform schema even when a year lacks a column
         if c not in df:
