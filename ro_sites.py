@@ -265,23 +265,27 @@ def replicate_model(pn, out):
         import statsmodels.formula.api as smf
     except ImportError:
         print("  statsmodels not installed; skipping model"); return None
+    use_rural = pn.rurality.notna().any()  # no crosswalk -> drop the rural term
     d = pn[(pn.first_year <= 2021) & pn.hosp_affiliated.notna()
-           & pn.rurality.notna()].copy()
+           & (pn.rurality.notna() | (not use_rural))].copy()
     if d.empty or d.disappear.nunique() < 2:
         print("  not enough affiliation-era data to fit model"); return None
+    if not use_rural:
+        print("  no rurality data; fitting model without the rural term")
     d["freestanding"] = (~d.hosp_affiliated.astype(bool)).astype(int)
     d["rural"] = (d.rurality != "urban").astype(int)
     d["log_org"] = np.log(d.org_size.fillna(1).clip(lower=1))
+    terms = ["freestanding", "rural", "log_org"] if use_rural else ["freestanding", "log_org"]
     fe = " + C(year)" if d.year.nunique() > 1 else ""
     try:
-        m = smf.logit(f"disappear ~ freestanding + rural + log_org + C(state){fe}",
+        m = smf.logit(f"disappear ~ {' + '.join(terms)} + C(state){fe}",
                       data=d).fit(disp=0, cov_type="cluster",
                                   cov_kwds={"groups": pd.factorize(d.site_id)[0]})
     except Exception as e:
         print(f"  model failed to fit: {e}"); return None
     res = pd.DataFrame({"OR": np.exp(m.params), "lo": np.exp(m.conf_int()[0]),
                         "hi": np.exp(m.conf_int()[1]), "p": m.pvalues})
-    res = res.loc[["freestanding", "rural", "log_org"]]
+    res = res.loc[terms]
     res.to_csv(os.path.join(out, "model_table1.csv"))
     print("  Table 1 replication:\n" + res.round(3).to_string())
     return res
